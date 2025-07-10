@@ -853,9 +853,22 @@ export default function GPUDashboard() {
     leftNodes = allNodes.filter(n => selectedNodeIds.has(n.id));
   } else {
     // 검색 중이면 검색 결과 사용, 아니면 GPU 타입별 필터링된 노드 사용
-    const baseNodes = searchTerm.trim() 
-      ? searchResults.map((result) => result.node)
-      : typeFilteredNodes.sort((a, b) => b.avgUsage - a.avgUsage);
+    let baseNodes: Node[];
+    if (searchTerm.trim()) {
+      // 검색 중일 때
+      if (searchFilterGPUType === "전체") {
+        // 전체 선택 시 검색 결과의 모든 노드 표시
+        baseNodes = searchResults.map((result) => result.node);
+      } else {
+        // 특정 GPU 타입 선택 시 해당 GPU 타입의 노드만 표시
+        baseNodes = searchResults
+          .filter(result => result.node.gpuType === searchFilterGPUType)
+          .map((result) => result.node);
+      }
+    } else {
+      // 검색하지 않을 때는 기존 로직
+      baseNodes = typeFilteredNodes.sort((a, b) => b.avgUsage - a.avgUsage);
+    }
     
     const selectedNodes = baseNodes.filter(n => selectedNodeIds.has(n.id));
     const unselectedNodes = baseNodes.filter(n => !selectedNodeIds.has(n.id));
