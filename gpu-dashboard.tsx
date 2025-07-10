@@ -4,7 +4,7 @@ import { useState, useEffect } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Search, Zap, User, Clock } from "lucide-react"
+import { Search, Zap, User, Clock, Maximize2, Minimize2 } from "lucide-react"
 
 // GPU 타입 정의
 type GPUType = "A100" | "A30" | "H100" | "H200" | "전체"
@@ -49,6 +49,7 @@ interface Job {
   cpuRequest: number // 요청한 CPU 개수
   memoryRequest: number // 요청한 Memory GB
   submittedAt: Date // 작업 제출 시간
+  status: "running" | "pending" // 작업 상태
 }
 
 // 검색 결과 인터페이스
@@ -116,20 +117,40 @@ const generateJobs = (): Job[] => {
   const memoryRequestOptions = [4, 8, 16, 32, 64, 128]
 
   gpuTypes.forEach((gpuType) => {
-    const pendingCount = Math.floor(Math.random() * 12) + 3
-    for (let i = 0; i < pendingCount; i++) {
+    // 진행중 작업 4개 이상 보장
+    const runningCount = Math.max(4, Math.floor(Math.random() * 4) + 2)
+    for (let i = 0; i < runningCount; i++) {
       const user = users[Math.floor(Math.random() * users.length)]
       const team = teams[Math.floor(Math.random() * teams.length)]
-
-      // 랜덤하게 리소스 요청량 결정
       const gpuRequest = gpuRequestOptions[Math.floor(Math.random() * gpuRequestOptions.length)]
       const cpuRequest = cpuRequestOptions[Math.floor(Math.random() * cpuRequestOptions.length)]
       const memoryRequest = memoryRequestOptions[Math.floor(Math.random() * memoryRequestOptions.length)]
-
-      // 최근 24시간 내 랜덤 시간 생성
       const now = new Date()
       const submittedAt = new Date(now.getTime() - Math.random() * 24 * 60 * 60 * 1000)
-
+      jobs.push({
+        id: `${gpuType}-running-${i + 1}`,
+        name: jobNames[Math.floor(Math.random() * jobNames.length)],
+        user,
+        team,
+        priority: Math.random() > 0.6 ? "high" : Math.random() > 0.3 ? "normal" : "low",
+        gpuType,
+        gpuRequest,
+        cpuRequest,
+        memoryRequest,
+        submittedAt,
+        status: "running",
+      })
+    }
+    // 대기중 작업
+    const pendingCount = Math.floor(Math.random() * 8) + 3
+    for (let i = 0; i < pendingCount; i++) {
+      const user = users[Math.floor(Math.random() * users.length)]
+      const team = teams[Math.floor(Math.random() * teams.length)]
+      const gpuRequest = gpuRequestOptions[Math.floor(Math.random() * gpuRequestOptions.length)]
+      const cpuRequest = cpuRequestOptions[Math.floor(Math.random() * cpuRequestOptions.length)]
+      const memoryRequest = memoryRequestOptions[Math.floor(Math.random() * memoryRequestOptions.length)]
+      const now = new Date()
+      const submittedAt = new Date(now.getTime() - Math.random() * 24 * 60 * 60 * 1000)
       jobs.push({
         id: `${gpuType}-pending-${i + 1}`,
         name: jobNames[Math.floor(Math.random() * jobNames.length)],
@@ -141,6 +162,7 @@ const generateJobs = (): Job[] => {
         cpuRequest,
         memoryRequest,
         submittedAt,
+        status: "pending",
       })
     }
   })
@@ -828,18 +850,30 @@ const JobItem = ({ job, index }: { job: Job; index: number }) => {
 const NodeGPUDetails = ({
   node,
   containerHeight,
+  onBackToMain,
 }: {
   node: Node
   containerHeight: number
+  onBackToMain?: () => void
 }) => {
   return (
     <Card>
-      <CardHeader className="pb-3">
+      <CardHeader className="pb-3 flex flex-row items-center justify-between">
         <CardTitle className="text-lg flex items-center justify-between">
           <span className="flex items-center gap-2">
             {node.name} GPU 사용 현황
           </span>
         </CardTitle>
+        {onBackToMain && (
+          <Button
+            variant="outline"
+            size="sm"
+            className="ml-2 text-xs"
+            onClick={onBackToMain}
+          >
+            메인으로 돌아가기
+          </Button>
+        )}
       </CardHeader>
       <CardContent style={{ height: `${containerHeight - 80}px` }} className="overflow-y-auto">
         <div className="space-y-4">
@@ -914,6 +948,13 @@ export default function GPUDashboard() {
   const [focusMode, setFocusMode] = useState(false);
   const [selectedGpuUsages, setSelectedGpuUsages] = useState<UserGPUUsage[]>([]); // 초기값 빈 배열
   const [searchFilterGPUType, setSearchFilterGPUType] = useState<GPUType>("전체"); // 검색 결과 필터링용
+  const [runningJobSearch, setRunningJobSearch] = useState("");
+  const [pendingJobSearch, setPendingJobSearch] = useState("");
+  const [selectedRunningJob, setSelectedRunningJob] = useState<Job|null>(null);
+  const [expandMode, setExpandMode] = useState<"none"|"running"|"pending">("none");
+  const [highlightedGpusByJob, setHighlightedGpusByJob] = useState<{[nodeId:string]: {[gpuIndex:number]: number}}|null>(null);
+  const [nodeSortByJob, setNodeSortByJob] = useState<string[]|null>(null); // Node 우선 정렬용
+  const [highlightedNodeIds, setHighlightedNodeIds] = useState<Set<string>>(new Set()); // 파란 테두리용
 
   useEffect(() => {
     const timer = setInterval(() => setCurrentTime(new Date()), 1000)
@@ -947,10 +988,10 @@ export default function GPUDashboard() {
     : typeFilteredNodes.sort((a, b) => b.avgUsage - a.avgUsage)
 
   // 선택된 GPU 타입의 대기중인 Job 필터링
-  const pendingJobs =
-    selectedGPUType === "전체"
-      ? allJobs
-      : allJobs.filter((job) => job.gpuType === selectedGPUType)
+  const runningJobs = allJobs.filter(job => job.status === "running" && (selectedGPUType === "전체" || job.gpuType === selectedGPUType));
+  const pendingJobs = allJobs.filter(job => job.status !== "running" && (selectedGPUType === "전체" || job.gpuType === selectedGPUType));
+  const filteredRunningJobs = runningJobs.filter(job => runningJobSearch.trim() === "" || job.name.toLowerCase().includes(runningJobSearch.toLowerCase()) || job.user.toLowerCase().includes(runningJobSearch.toLowerCase()) || job.team.toLowerCase().includes(runningJobSearch.toLowerCase()));
+  const filteredPendingJobs = pendingJobs.filter(job => pendingJobSearch.trim() === "" || job.name.toLowerCase().includes(pendingJobSearch.toLowerCase()) || job.user.toLowerCase().includes(pendingJobSearch.toLowerCase()) || job.team.toLowerCase().includes(pendingJobSearch.toLowerCase()));
 
   // 선택된 GPU가 속한 Node id 집합
   const selectedNodeIds = new Set(selectedGpuUsages.map(u => u.nodeId));
@@ -991,6 +1032,19 @@ export default function GPUDashboard() {
     const selectedNodes = leftNodes.filter(n => selectedNodeIdsByGpuClick.has(n.id));
     const unselectedNodes = leftNodes.filter(n => !selectedNodeIdsByGpuClick.has(n.id));
     leftNodesSorted = [...selectedNodes, ...unselectedNodes];
+  }
+  // 진행중 작업 클릭 시 관련 Node를 맨 앞에 정렬
+  if (!focusMode && nodeSortByJob && nodeSortByJob.length > 0) {
+    const jobNodes = leftNodes.filter(n => nodeSortByJob.includes(n.id));
+    const otherNodes = leftNodes.filter(n => !nodeSortByJob.includes(n.id));
+    leftNodesSorted = [...jobNodes, ...otherNodes];
+  }
+  // 멀티서치와 진행중 작업이 동시에 있을 때, 멀티서치 우선 정렬
+  if (!focusMode && selectedNodeIdsByGpuClick.size > 0 && nodeSortByJob && nodeSortByJob.length > 0) {
+    const multiNodes = leftNodes.filter(n => selectedNodeIdsByGpuClick.has(n.id));
+    const jobNodes = leftNodes.filter(n => nodeSortByJob.includes(n.id) && !selectedNodeIdsByGpuClick.has(n.id));
+    const otherNodes = leftNodes.filter(n => !selectedNodeIdsByGpuClick.has(n.id) && !nodeSortByJob.includes(n.id));
+    leftNodesSorted = [...multiNodes, ...jobNodes, ...otherNodes];
   }
 
   // CPU/Memory 통계 계산 (기존 로직)
@@ -1073,6 +1127,48 @@ export default function GPUDashboard() {
     });
   }
 
+  // 진행중 작업 클릭 시 해당 GPU 하이라이트 (포커스 모드 X, 노드 전체 빛 X)
+  function handleRunningJobSelect(job: Job) {
+    setSelectedRunningJob(job);
+    // 해당 작업이 사용 중인 GPU만 파란색 하이라이트
+    const usages = findGpusByUserOrTeam(allNodes, job.user + " " + job.team);
+    // 노드별, GPU별로 segmentUsage 합산
+    const highlight: {[nodeId:string]: {[gpuIndex:number]: number}} = {};
+    const nodeIds: string[] = [];
+    usages.forEach(u => {
+      if (!highlight[u.nodeId]) highlight[u.nodeId] = {};
+      highlight[u.nodeId][u.gpuIndex] = (highlight[u.nodeId][u.gpuIndex] || 0) + u.segmentUsage;
+      if (!nodeIds.includes(u.nodeId)) nodeIds.push(u.nodeId);
+    });
+    setHighlightedGpusByJob(highlight);
+    setNodeSortByJob(nodeIds);
+  }
+  // 진행중/대기중 작업 선택 초기화 시 GPU 하이라이트도 초기화
+  function clearJobGpuHighlights() {
+    setSelectedRunningJob(null);
+    setHighlightedGpusByJob(null);
+    setNodeSortByJob(null);
+  }
+
+  // expand 모드에서 노란색 빛(animatePulse) 비활성화
+  const isExpandActive = expandMode !== "none";
+
+  // 하이라이트 노드 관리: 반드시 useEffect에서만 setState
+  useEffect(() => {
+    if (focusMode) {
+      setHighlightedNodeIds(new Set());
+      return;
+    }
+    // 멀티서치 우선
+    if (selectedGpuUsages.length > 0) {
+      setHighlightedNodeIds(new Set(selectedGpuUsages.map(u => u.nodeId)));
+    } else if (nodeSortByJob && nodeSortByJob.length > 0) {
+      setHighlightedNodeIds(new Set(nodeSortByJob));
+    } else {
+      setHighlightedNodeIds(new Set());
+    }
+  }, [focusMode, selectedGpuUsages, nodeSortByJob]);
+
   return (
     <div className="min-h-screen bg-gray-50 p-4">
       <div className="max-w-full mx-auto">
@@ -1092,6 +1188,15 @@ export default function GPUDashboard() {
                   className="pl-10 w-80"
                 />
               </div>
+              {/* 전체 보기 버튼 */}
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-10"
+                onClick={() => setSearchTerm("")}
+              >
+                전체 보기
+              </Button>
               <div className="flex items-center gap-2 text-sm text-gray-600">
                 <Zap className="w-4 h-4" />
                 <span>실시간 업데이트: {currentTime.toLocaleTimeString()}</span>
@@ -1197,13 +1302,18 @@ export default function GPUDashboard() {
                    let animatePulse = false;
                    if (!focusMode && searchTerm.trim()) {
                      highlightedGpuUsages = highlightGpuUsagesByNode[node.id] || {};
+                   } else if (!focusMode && highlightedGpusByJob) {
+                     // 진행중 작업 클릭 시 GPU별 하이라이트
+                     highlightedGpuUsages = highlightedGpusByJob[node.id] || {};
                    } else {
                      const props = getNodeCardProps(node);
                      highlightedGpuUsages = props.highlightedGpuUsages;
                      animatePulse = props.animatePulse;
                    }
+                   // expand 모드에서는 노란색 빛(animatePulse) 비활성화
+                   if (isExpandActive) animatePulse = false;
                    // 전체모드에서 GPU 클릭 시 해당 Node 하이라이트 (여러개)
-                   const isSelectedByGpuClick = !focusMode && selectedNodeIdsByGpuClick.has(node.id);
+                   const isSelectedByGpuClick = !focusMode && highlightedNodeIds.has(node.id);
                    return (
                      <NodeCard
                        key={node.id}
@@ -1229,7 +1339,137 @@ export default function GPUDashboard() {
           </div>
           {/* 오른쪽: 검색창이 있을 때만 UserSearchResultsPanel, 없으면 기존 대기열/노드 상세 */}
           <div className="flex-1 space-y-4">
-            {searchTerm.trim() ? (
+            {/* 오른쪽 영역을 상/하로 분할 */}
+            {!searchTerm.trim() && !selectedNode ? (
+              <div className="flex flex-col h-full" style={{height: containerSize + 4}}>
+                {/* 진행중인 작업 영역 */}
+                {(expandMode === "none" || expandMode === "running") && (
+                <div
+                  className={`flex-1 mb-2 flex flex-col min-h-[200px] transition-all duration-500 ease-in-out ${expandMode === "running" ? "z-10 scale-105" : "scale-100"}`}
+                  style={{
+                    height: expandMode === "running" ? `${containerSize}px` : "45%",
+                    maxHeight: `${containerSize}px`,
+                    overflow: "hidden",
+                    opacity: expandMode === "running" ? 1 : 0.98,
+                    transition: 'height 0.5s cubic-bezier(0.4,0,0.2,1), transform 0.5s cubic-bezier(0.4,0,0.2,1), opacity 0.5s',
+                  }}
+                >
+                  <Card className="flex-1 flex flex-col">
+                    <CardHeader className="pb-3">
+                      <CardTitle className="text-lg flex items-center justify-between">
+                        <span>{selectedGPUType} 진행중인 작업</span>
+                        <div className="flex items-center gap-2">
+                          <Input
+                            type="text"
+                            placeholder="진행중 작업 검색"
+                            value={runningJobSearch}
+                            onChange={e => setRunningJobSearch(e.target.value)}
+                            className="w-40 text-xs"
+                          />
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => { clearJobGpuHighlights(); setRunningJobSearch(""); }}
+                            className="text-xs"
+                          >
+                            선택 초기화
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="text-xs"
+                            onClick={() => setExpandMode(expandMode === "running" ? "none" : "running")}
+                            aria-label={expandMode === "running" ? "축소" : "확대"}
+                          >
+                            {expandMode === "running" ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
+                          </Button>
+                        </div>
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent className="overflow-y-auto flex-1" style={{maxHeight: expandMode === "running" ? containerSize : 220, minHeight: 0, marginBottom: 0, paddingBottom: 0}}>
+                      <div className="space-y-3">
+                        {filteredRunningJobs.length > 0 ? (
+                          filteredRunningJobs.map((job, index) => (
+                            <div
+                              key={job.id}
+                              className={`cursor-pointer ${selectedRunningJob?.id === job.id ? "ring-2 ring-blue-400" : ""}`}
+                              onClick={() => handleRunningJobSelect(job)}
+                            >
+                              <JobItem job={job} index={index} />
+                            </div>
+                          ))
+                        ) : (
+                          <div className="text-center text-gray-500 py-8">
+                            현재 {selectedGPUType}에 진행중인 작업이 없습니다.
+                          </div>
+                        )}
+                      </div>
+                    </CardContent>
+                  </Card>
+                </div>
+                )}
+                {/* 대기중인 작업 영역 */}
+                {(expandMode === "none" || expandMode === "pending") && (
+                <div
+                  className={`flex-1 flex flex-col min-h-[120px] transition-all duration-500 ease-in-out ${expandMode === "pending" ? "z-10 scale-105" : "scale-100"}`}
+                  style={{
+                    height: expandMode === "pending" ? `${containerSize}px` : "35%",
+                    maxHeight: `${containerSize}px`,
+                    overflow: "hidden",
+                    opacity: expandMode === "pending" ? 1 : 0.98,
+                    transition: 'height 0.5s cubic-bezier(0.4,0,0.2,1), transform 0.5s cubic-bezier(0.4,0,0.2,1), opacity 0.5s',
+                  }}
+                >
+                  <Card className="flex-1 flex flex-col">
+                    <CardHeader className="pb-3">
+                      <CardTitle className="text-lg flex items-center justify-between">
+                        <span>{selectedGPUType} 대기중인 작업</span>
+                        <div className="flex items-center gap-2">
+                          <Input
+                            type="text"
+                            placeholder="대기중 작업 검색"
+                            value={pendingJobSearch}
+                            onChange={e => setPendingJobSearch(e.target.value)}
+                            className="w-40 text-xs"
+                          />
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => setPendingJobSearch("")}
+                            className="text-xs"
+                          >
+                            선택 초기화
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="text-xs"
+                            onClick={() => setExpandMode(expandMode === "pending" ? "none" : "pending")}
+                            aria-label={expandMode === "pending" ? "축소" : "확대"}
+                          >
+                            {expandMode === "pending" ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
+                          </Button>
+                        </div>
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent className="overflow-y-auto flex-1" style={{maxHeight: expandMode === "pending" ? containerSize : 160, minHeight: 0, marginBottom: 0, paddingBottom: 0}}>
+                      <div className="space-y-3">
+                        {filteredPendingJobs.length > 0 ? (
+                          filteredPendingJobs.map((job, index) => (
+                            <JobItem key={job.id} job={job} index={index} />
+                          ))
+                        ) : (
+                          <div className="text-center text-gray-500 py-8">
+                            현재 {selectedGPUType}에 대기 중인 작업이 없습니다.
+                          </div>
+                        )}
+                      </div>
+                    </CardContent>
+                  </Card>
+                </div>
+                )}
+              </div>
+            ) : searchTerm.trim() ? (
               <UserSearchResultsPanel
                 results={filteredSearchResults}
                 selected={selectedGpuUsages}
@@ -1244,104 +1484,13 @@ export default function GPUDashboard() {
               <NodeGPUDetails
                 node={selectedNode}
                 containerHeight={containerSize + 4}
+                onBackToMain={() => setSelectedNode(null)}
               />
-            ) : (
-              <Card>
-                <CardHeader className="pb-3">
-                  <CardTitle className="text-lg flex items-center justify-between">
-                    <span>{selectedGPUType} 대기중인 작업</span>
-                    <div className="text-sm font-normal text-gray-500">총 {pendingJobs.length}개 작업 대기</div>
-                  </CardTitle>
-                </CardHeader>
-                <CardContent style={{ height: `${containerSize - 76}px` }} className="overflow-y-auto">
-                  <div className="space-y-3">
-                    {pendingJobs.length > 0 ? (
-                      pendingJobs.map((job, index) => <JobItem key={job.id} job={job} index={index} />)
-                    ) : (
-                      <div className="text-center text-gray-500 py-8">
-                        현재 {selectedGPUType}에 대기 중인 작업이 없습니다.
-                      </div>
-                    )}
-                  </div>
-                </CardContent>
-              </Card>
-            )}
+            ) : null}
           </div>
         </div>
         {/* 범례 */}
-        <div className="mt-6 bg-white rounded-lg p-4 shadow-sm">
-          <h4 className="text-lg font-medium text-gray-700 mb-3">범례</h4>
-          <div className="grid grid-cols-4 gap-6">
-            <div>
-              <h5 className="text-sm font-medium text-gray-600 mb-2">GPU 사용량</h5>
-              <div className="grid grid-cols-1 gap-2 text-xs">
-                {[
-                  { color: "bg-gray-100", label: "미사용" },
-                  { color: "bg-emerald-500", label: "낮음 (1-25%)" },
-                  { color: "bg-green-500", label: "보통 (26-50%)" },
-                  { color: "bg-yellow-500", label: "높음 (51-75%)" },
-                  { color: "bg-red-500", label: "매우높음 (76-100%)" },
-                  { color: "bg-gray-400", label: "문제발생" },
-                ].map((item, index) => (
-                  <div key={index} className="flex items-center gap-2">
-                    <div className={`w-3 h-2 ${item.color} rounded-sm border`}></div>
-                    <span>{item.label}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-            <div>
-              <h5 className="text-sm font-medium text-gray-600 mb-2">노드 상태</h5>
-              <div className="space-y-1 text-xs">
-                {[
-                  { border: "border-green-500", label: "온라인" },
-                  { border: "border-red-500", label: "오프라인" },
-                  { border: "border-yellow-500", label: "유지보수" },
-                ].map((item, index) => (
-                  <div key={index} className="flex items-center gap-2">
-                    <div className={`w-3 h-3 bg-white border-2 ${item.border}`}></div>
-                    <span>{item.label}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-            <div>
-              <h5 className="text-sm font-medium text-gray-600 mb-2">검색 하이라이트</h5>
-              <div className="space-y-2 text-xs">
-                <div className="flex items-center gap-2">
-                  <div className="w-4 h-4 bg-gradient-to-br from-yellow-100 to-orange-100 rounded animate-[pulse_2s_ease-in-out_infinite]"></div>
-                  <span className="font-semibold text-yellow-700">전체 노드 매칭</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <div className="w-4 h-2 bg-gradient-to-r from-yellow-200 to-orange-200 rounded animate-[pulse_2s_ease-in-out_infinite]"></div>
-                  <span className="text-yellow-600">매칭 사용자 세그먼트</span>
-                </div>
-                <div className="text-xs text-gray-500 mt-2 bg-gray-50 p-2 rounded">
-                  🔍 복합검색: 조건1/조건2/조건3
-                  <br />✨ 매칭된 사용자 부분만 천천히 깜빡임 (2초 주기)
-                </div>
-              </div>
-            </div>
-            <div>
-              <h5 className="text-sm font-medium text-gray-600 mb-2">GPU 분할 사용</h5>
-              <div className="space-y-1 text-xs">
-                <div className="flex items-center gap-2">
-                  <div className="w-3 h-2 bg-blue-500 rounded"></div>
-                  <span>사용자 1</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <div className="w-3 h-2 bg-green-500 rounded"></div>
-                  <span>사용자 2</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <div className="w-3 h-2 bg-purple-500 rounded"></div>
-                  <span>사용자 3</span>
-                </div>
-                <div className="text-xs text-gray-500 mt-1">* 호버하면 상세 정보 표시</div>
-              </div>
-            </div>
-          </div>
-        </div>
+        {/* 범례 영역 삭제 */}
       </div>
     </div>
   )
