@@ -45,6 +45,10 @@ interface Job {
   team: string
   priority: "high" | "normal" | "low"
   gpuType: GPUType
+  gpuRequest: number // 요청한 GPU 개수 (0.25, 0.5, 1, 2, 4, 8 등)
+  cpuRequest: number // 요청한 CPU 개수
+  memoryRequest: number // 요청한 Memory GB
+  submittedAt: Date // 작업 제출 시간
 }
 
 // 검색 결과 인터페이스
@@ -94,7 +98,7 @@ const teams = ["AI연구팀", "데이터팀", "비전팀", "NLP팀", "로보틱�
 // 샘플 Job 데이터 생성
 const generateJobs = (): Job[] => {
   const jobs: Job[] = []
-  const gpuTypes: GPUType[] = ["전체","A100", "A30", "H100", "H200"]
+  const gpuTypes: GPUType[] = ["A100", "A30", "H100", "H200"]
   const jobNames = [
     "ResNet Training",
     "BERT Fine-tuning",
@@ -106,11 +110,25 @@ const generateJobs = (): Job[] => {
     "Neural Architecture Search",
   ]
 
+  // GPU 요청량 옵션들
+  const gpuRequestOptions = [0.25, 0.5, 1, 2, 4, 8]
+  const cpuRequestOptions = [1, 2, 4, 8, 16, 32]
+  const memoryRequestOptions = [4, 8, 16, 32, 64, 128]
+
   gpuTypes.forEach((gpuType) => {
     const pendingCount = Math.floor(Math.random() * 12) + 3
     for (let i = 0; i < pendingCount; i++) {
       const user = users[Math.floor(Math.random() * users.length)]
       const team = teams[Math.floor(Math.random() * teams.length)]
+
+      // 랜덤하게 리소스 요청량 결정
+      const gpuRequest = gpuRequestOptions[Math.floor(Math.random() * gpuRequestOptions.length)]
+      const cpuRequest = cpuRequestOptions[Math.floor(Math.random() * cpuRequestOptions.length)]
+      const memoryRequest = memoryRequestOptions[Math.floor(Math.random() * memoryRequestOptions.length)]
+
+      // 최근 24시간 내 랜덤 시간 생성
+      const now = new Date()
+      const submittedAt = new Date(now.getTime() - Math.random() * 24 * 60 * 60 * 1000)
 
       jobs.push({
         id: `${gpuType}-pending-${i + 1}`,
@@ -119,6 +137,10 @@ const generateJobs = (): Job[] => {
         team,
         priority: Math.random() > 0.6 ? "high" : Math.random() > 0.3 ? "normal" : "low",
         gpuType,
+        gpuRequest,
+        cpuRequest,
+        memoryRequest,
+        submittedAt,
       })
     }
   })
@@ -695,7 +717,7 @@ const NodeCard = ({
 }
 
 // Job 아이템 컴포넌트
-const JobItem = ({ job }: { job: Job }) => {
+const JobItem = ({ job, index }: { job: Job; index: number }) => {
   const getPriorityColor = () => {
     switch (job.priority) {
       case "high":
@@ -707,20 +729,62 @@ const JobItem = ({ job }: { job: Job }) => {
     }
   }
 
+  const formatTimeAgo = (date: Date) => {
+    const now = new Date()
+    const diffMs = now.getTime() - date.getTime()
+    const diffHours = Math.floor(diffMs / (1000 * 60 * 60))
+    const diffMinutes = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60))
+    
+    if (diffHours > 0) {
+      return `${diffHours}시간 ${diffMinutes}분 전`
+    } else {
+      return `${diffMinutes}분 전`
+    }
+  }
+
   return (
-    <div className="flex items-center gap-3 p-3 bg-white border rounded-lg hover:shadow-sm transition-shadow">
-      <Clock className="w-4 h-4 text-yellow-500" />
+    <div className="flex items-start gap-3 p-3 bg-white border rounded-lg hover:shadow-sm transition-shadow">
+      {/* 순서 번호 */}
+      <div className="flex-shrink-0 w-6 h-6 bg-blue-500 text-white rounded-full flex items-center justify-center text-xs font-bold">
+        {index + 1}
+      </div>
+      
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 mb-1">
           <h4 className="font-medium text-sm truncate">{job.name}</h4>
           <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${getPriorityColor()}`}>{job.priority}</span>
         </div>
-        <div className="flex items-center gap-4 text-xs text-gray-500">
+        
+        {/* 사용자 및 팀 정보 */}
+        <div className="flex items-center gap-4 text-xs text-gray-500 mb-2">
           <div className="flex items-center gap-1">
             <User className="w-3 h-3" />
             <span>{job.user}</span>
           </div>
           <span className="px-2 py-0.5 bg-gray-100 rounded text-gray-700">{job.team}</span>
+        </div>
+        
+        {/* 리소스 요청 정보 */}
+        <div className="flex items-center gap-4 text-xs text-gray-600 mb-1">
+          <div className="flex items-center gap-1">
+            <span className="font-medium">GPU:</span>
+            <span className="bg-blue-100 px-1.5 py-0.5 rounded">{job.gpuRequest}개</span>
+            <span className="bg-orange-100 px-1.5 py-0.5 rounded text-orange-700">{job.gpuType}</span>
+          </div>
+          <div className="flex items-center gap-1">
+            <span className="font-medium">CPU:</span>
+            <span className="bg-green-100 px-1.5 py-0.5 rounded">{job.cpuRequest}개</span>
+          </div>
+          <div className="flex items-center gap-1">
+            <span className="font-medium">Memory:</span>
+            <span className="bg-purple-100 px-1.5 py-0.5 rounded">{job.memoryRequest}GB</span>
+          </div>
+        </div>
+        
+        {/* 제출 시간 */}
+        <div className="flex items-center gap-1 text-xs text-gray-400">
+          <Clock className="w-3 h-3" />
+          <span>{formatTimeAgo(job.submittedAt)}</span>
         </div>
       </div>
     </div>
@@ -1122,7 +1186,7 @@ export default function GPUDashboard() {
                 <CardContent style={{ height: `${containerSize - 76}px` }} className="overflow-y-auto">
                   <div className="space-y-3">
                     {pendingJobs.length > 0 ? (
-                      pendingJobs.map((job) => <JobItem key={job.id} job={job} />)
+                      pendingJobs.map((job, index) => <JobItem key={job.id} job={job} index={index} />)
                     ) : (
                       <div className="text-center text-gray-500 py-8">
                         현재 {selectedGPUType}에 대기 중인 작업이 없습니다.
