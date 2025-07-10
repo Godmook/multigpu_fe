@@ -413,18 +413,18 @@ const UserSearchResultsPanel = ({
 };
 
 // Node 상태에 따른 테두리 색상
-const getNodeBorderColor = (status: string) => {
-  switch (status) {
-    case "online":
-      return "border-green-500"
-    case "offline":
-      return "border-red-500"
-    case "maintenance":
-      return "border-yellow-500"
-    default:
-      return "border-gray-500"
-  }
-}
+// const getNodeBorderColor = (status: string) => {
+//   switch (status) {
+//     case "online":
+//       return "border-green-500"
+//     case "offline":
+//       return "border-red-500"
+//     case "maintenance":
+//       return "border-yellow-500"
+//     default:
+//       return "border-gray-500"
+//   }
+// }
 
 // 사용률 막대그래프 컴포넌트
 const UsageBar = ({ percentage, color }: { percentage: number; color: string }) => (
@@ -440,7 +440,7 @@ const GPUProgressBar = ({ gpu, isHighlighted }: { gpu: GPU; isHighlighted?: bool
       .fill(0)
       .map((_, i) => {
       const isUsed = i < gpu.usage;
-      const bg = isUsed ? "bg-gray-500" : "bg-gray-200"; // 미사용은 연회색
+      const bg = isUsed ? (isHighlighted ? "bg-blue-500" : "bg-gray-500") : "bg-gray-200"; // 포커스 모드에서 선택된 GPU는 파란색
         return (
           <div
             key={i}
@@ -462,21 +462,23 @@ const GPUProgressBar = ({ gpu, isHighlighted }: { gpu: GPU; isHighlighted?: bool
 const DetailedGPUBar = ({
   gpu,
   matchingSegmentIndexes,
+  pulseColor = "blue"
 }: {
   gpu: GPU
   matchingSegmentIndexes?: number[]
+  pulseColor?: "blue" | "yellow"
 }) => {
   if (gpu.status !== "active" || gpu.segments.length === 0) {
     return (
       <div
         className={`
           w-full h-8 bg-gray-200 rounded flex items-center justify-center transition-all duration-300
-          ${matchingSegmentIndexes && matchingSegmentIndexes.length > 0 ? "animate-[pulse_2s_ease-in-out_infinite]" : ""}
+          ${matchingSegmentIndexes && matchingSegmentIndexes.length > 0 ? `animate-[pulse_2s_ease-in-out_infinite] ${pulseColor === "blue" ? "shadow-[0_0_0_2px_#3b82f6]" : "shadow-[0_0_0_2px_#facc15]"}` : ""}
         `}
       >
         <span
           className={`text-xs relative z-10 ${
-            matchingSegmentIndexes && matchingSegmentIndexes.length > 0 ? "text-yellow-800 font-bold" : "text-gray-500"
+            matchingSegmentIndexes && matchingSegmentIndexes.length > 0 ? (pulseColor === "blue" ? "text-blue-800 font-bold" : "text-yellow-800 font-bold") : "text-gray-500"
           }`}
         >
           {gpu.status === "idle" ? "유휴" : gpu.status === "error" ? "오류" : "미사용"}
@@ -497,7 +499,7 @@ const DetailedGPUBar = ({
               key={index}
               className={`
                 ${colors[index % colors.length]} flex items-center justify-center text-white relative group
-                ${isMatching ? "animate-[pulse_2s_ease-in-out_infinite]" : ""}
+                ${isMatching ? `animate-[pulse_2s_ease-in-out_infinite] ${pulseColor === "blue" ? "shadow-[0_0_0_2px_#3b82f6]" : "shadow-[0_0_0_2px_#facc15]"}` : ""}
               `}
               style={{
                 width: `${segment.usage}%`,
@@ -511,7 +513,7 @@ const DetailedGPUBar = ({
                 <div>{segment.user}</div>
                 <div>{segment.team}</div>
                 <div>{segment.usage}% 사용</div>
-                {isMatching && <div className="text-yellow-300 font-bold">🔍 검색 매칭</div>}
+                {isMatching && <div className={pulseColor === "blue" ? "text-blue-300 font-bold" : "text-yellow-300 font-bold"}>🔍 검색 매칭</div>}
               </div>
             </div>
           )
@@ -554,13 +556,11 @@ const NodeCard = ({
   // 전체 노드 매칭 시에만 노드 전체 깜빡임
   const getCardStyle = () => {
     let baseStyle = `
-      border-2 transition-all duration-300 hover:shadow-lg hover:scale-105 cursor-pointer
-      bg-white ${getNodeBorderColor(node.status)}
+      border-2 border-black transition-all duration-300 hover:shadow-lg hover:scale-105 cursor-pointer
+      bg-white
       ${isSelected ? "ring-2 ring-blue-500 ring-offset-1 shadow-blue-500/30 shadow-lg" : ""}
       group relative overflow-hidden
     `
-
-    // 전체 노드 매칭 시에만 노드 전체 깜빡임
     if (animatePulse) {
       baseStyle += ` 
         animate-[pulse_2s_ease-in-out_infinite]
@@ -568,7 +568,6 @@ const NodeCard = ({
         shadow-xl shadow-yellow-500/50
       `
     }
-
     return baseStyle
   }
 
@@ -663,9 +662,7 @@ const NodeGPUDetails = ({
   containerHeight: number
 }) => {
   return (
-    <Card
-      className="animate-[pulse_2s_ease-in-out_infinite] bg-gradient-to-br from-yellow-50 to-orange-50"
-    >
+    <Card>
       <CardHeader className="pb-3">
         <CardTitle className="text-lg flex items-center justify-between">
           <span className="flex items-center gap-2">
@@ -696,7 +693,7 @@ const NodeGPUDetails = ({
                     {gpu.totalUsage}%
                   </div>
                 </div>
-                <DetailedGPUBar gpu={gpu} matchingSegmentIndexes={[]} />
+                <DetailedGPUBar gpu={gpu} matchingSegmentIndexes={[]} pulseColor="blue" />
                 {gpu.segments.length > 0 && (
                   <div
                     className={`
@@ -836,7 +833,7 @@ export default function GPUDashboard() {
       const highlightedGpus = selectedGpuUsages
         .filter(u => u.nodeId === node.id)
         .map(u => u.gpuIndex);
-      return { highlightedGpus, animatePulse: false };
+      return { highlightedGpus, animatePulse: false, pulseColor: "blue" };
     } else {
       // 전체 모드: Node 전체 animatePulse
       const animatePulse = selectedNodeIds.has(node.id) && selectedGpuUsages.length > 0;
@@ -963,7 +960,7 @@ export default function GPUDashboard() {
                 }}
               >
                 {leftNodes.map((node) => {
-                  const { highlightedGpus, animatePulse } = getNodeCardProps(node);
+                  const { highlightedGpus, animatePulse, pulseColor } = getNodeCardProps(node);
                   return (
                     <NodeCard
                       key={node.id}
