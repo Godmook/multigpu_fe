@@ -301,16 +301,27 @@ const performComplexSearch = (nodes: Node[], searchTerm: string): SearchResult[]
 // --- 사용자/팀 GPU 사용 현황 검색 함수 복구 ---
 const findGpusByUserOrTeam = (nodes: Node[], searchTerm: string): UserGPUUsage[] => {
   if (!searchTerm.trim()) return [];
-  const lowercasedSearchTerm = searchTerm.toLowerCase();
+  
+  // 검색어를 공백, 슬래시, 콤마 등으로 분리
+  const searchTerms = searchTerm.toLowerCase().split(/[\s\/,]+/).filter(term => term.trim());
   const results: UserGPUUsage[] = [];
+  
   nodes.forEach((node) => {
     node.gpus.forEach((gpu, gpuIndex) => {
       if (gpu.status === 'active') {
         gpu.segments.forEach((segment) => {
-          if (
-            segment.user.toLowerCase().includes(lowercasedSearchTerm) ||
-            segment.team.toLowerCase().includes(lowercasedSearchTerm)
-          ) {
+          // 모든 검색어가 사용자명, 팀명, 또는 GPU 타입에 포함되는지 확인
+          const userLower = segment.user.toLowerCase();
+          const teamLower = segment.team.toLowerCase();
+          const gpuTypeLower = node.gpuType.toLowerCase();
+          
+          const allTermsMatch = searchTerms.every(term => 
+            userLower.includes(term) || 
+            teamLower.includes(term) || 
+            gpuTypeLower.includes(term)
+          );
+          
+          if (allTermsMatch) {
             results.push({
               nodeId: node.id,
               nodeName: node.name,
@@ -425,7 +436,7 @@ const UserSearchResultsPanel = ({
         {/* 상단 요약 박스 - 전체 검색 결과 기준 */}
         {Object.keys(totalSummary).length > 0 && (
           <div className="mt-2 mb-1 p-3 bg-blue-50 rounded border border-blue-200 text-sm text-blue-900 font-semibold flex flex-wrap gap-4">
-            <span className="mr-2">{userOrTeam}님의 전체 사용량:</span>
+            <span className="mr-2">검색결과의 전체 사용량:</span>
             {Object.entries(totalSummary).filter(([type, val]) => val > 0 && type !== '전체').map(([type, val]) => (
               <span key={type} className="mr-2">
                 {type}: {val.toFixed(2)}장
