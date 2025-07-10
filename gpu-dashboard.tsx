@@ -340,6 +340,7 @@ const UserSearchResultsPanel = ({
   allNodes,
   searchFilterGPUType,
   onFilterChange,
+  onClearSelections,
 }: {
   results: UserGPUUsage[];
   selected: UserGPUUsage[];
@@ -348,12 +349,26 @@ const UserSearchResultsPanel = ({
   allNodes: Node[];
   searchFilterGPUType: GPUType;
   onFilterChange: (type: GPUType) => void;
+  onClearSelections: () => void;
 }) => {
-  // GPU 타입별 합산
-  const summary = results.reduce((acc, cur) => {
+  const [internalSearchTerm, setInternalSearchTerm] = useState("");
+  
+  // 전체 검색 결과에서 GPU 타입별 합산 (필터링 전)
+  const totalSummary = results.reduce((acc, cur) => {
     acc[cur.gpuType] = (acc[cur.gpuType] || 0) + cur.segmentUsage / 100;
     return acc;
   }, {} as Record<GPUType, number>);
+  
+  // 내부 검색 필터링
+  const filteredResults = internalSearchTerm.trim()
+    ? results.filter(result => 
+        result.nodeName.toLowerCase().includes(internalSearchTerm.toLowerCase()) ||
+        result.user.toLowerCase().includes(internalSearchTerm.toLowerCase()) ||
+        result.team.toLowerCase().includes(internalSearchTerm.toLowerCase()) ||
+        result.gpuType.toLowerCase().includes(internalSearchTerm.toLowerCase())
+      )
+    : results;
+  
   const userOrTeam = results[0]?.user || results[0]?.team || "";
   // Node 객체 찾기
   const getNodeById = (nodeId: string) => allNodes.find(n => n.id === nodeId);
@@ -364,12 +379,35 @@ const UserSearchResultsPanel = ({
     <Card>
       <CardHeader className="pb-3">
         <CardTitle className="text-lg flex items-center justify-between">
-          <span>검색 결과: {results.length}개 GPU 사용 중</span>
+          <span>검색 결과: {filteredResults.length}개 GPU 사용 중</span>
+          {selected.length > 0 && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={onClearSelections}
+              className="text-xs"
+            >
+              선택 초기화 ({selected.length})
+            </Button>
+          )}
         </CardTitle>
+        
+        {/* 내부 검색창 */}
+        <div className="relative mt-2">
+          <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-4 h-4" />
+          <Input
+            type="text"
+            placeholder="검색 결과 내에서 추가 검색 (노드명/사용자명/팀명/GPU타입)"
+            value={internalSearchTerm}
+            onChange={(e) => setInternalSearchTerm(e.target.value)}
+            className="pl-10 w-full"
+          />
+        </div>
+        
         {/* GPU 타입별 필터링 버튼 */}
         <div className="flex gap-2 mt-2">
           {gpuTypes.map((gpuType) => {
-            const typeResults = results.filter(r => gpuType === "전체" || r.gpuType === gpuType);
+            const typeResults = filteredResults.filter(r => gpuType === "전체" || r.gpuType === gpuType);
             return (
               <Button
                 key={gpuType}
@@ -383,11 +421,12 @@ const UserSearchResultsPanel = ({
             );
           })}
         </div>
-        {/* 상단 요약 박스 */}
-        {Object.keys(summary).length > 0 && (
+        
+        {/* 상단 요약 박스 - 전체 검색 결과 기준 */}
+        {Object.keys(totalSummary).length > 0 && (
           <div className="mt-2 mb-1 p-3 bg-blue-50 rounded border border-blue-200 text-sm text-blue-900 font-semibold flex flex-wrap gap-4">
             <span className="mr-2">{userOrTeam}님의 전체 사용량:</span>
-            {Object.entries(summary).filter(([type, val]) => val > 0 && type !== '전체').map(([type, val]) => (
+            {Object.entries(totalSummary).filter(([type, val]) => val > 0 && type !== '전체').map(([type, val]) => (
               <span key={type} className="mr-2">
                 {type}: {val.toFixed(2)}장
               </span>
@@ -397,7 +436,7 @@ const UserSearchResultsPanel = ({
       </CardHeader>
       <CardContent style={{ height: `${containerHeight - 76}px` }} className="overflow-y-auto">
         <div className="space-y-4">
-          {results.map((usage) => {
+          {filteredResults.map((usage) => {
             const node = getNodeById(usage.nodeId);
             const gpu = node ? node.gpus[usage.gpuIndex] : undefined;
             const isSelected = selected.some(s => s.gpuId === usage.gpuId && s.user === usage.user && s.team === usage.team);
@@ -813,8 +852,13 @@ export default function GPUDashboard() {
   if (focusMode) {
     leftNodes = allNodes.filter(n => selectedNodeIds.has(n.id));
   } else {
-    const selectedNodes = allNodes.filter(n => selectedNodeIds.has(n.id));
-    const unselectedNodes = allNodes.filter(n => !selectedNodeIds.has(n.id));
+    // 검색 중이면 검색 결과 사용, 아니면 GPU 타입별 필터링된 노드 사용
+    const baseNodes = searchTerm.trim() 
+      ? searchResults.map((result) => result.node)
+      : typeFilteredNodes.sort((a, b) => b.avgUsage - a.avgUsage);
+    
+    const selectedNodes = baseNodes.filter(n => selectedNodeIds.has(n.id));
+    const unselectedNodes = baseNodes.filter(n => !selectedNodeIds.has(n.id));
     leftNodes = [...selectedNodes, ...unselectedNodes];
   }
 
@@ -848,8 +892,15 @@ export default function GPUDashboard() {
       if (isCtrlPressed) {
         return isAlreadySelected ? prev.filter(s => !(s.gpuId === usage.gpuId && s.user === usage.user && s.team === usage.team)) : [...prev, usage];
       }
-      return isAlreadySelected && prev.length === 1 ? [] : [usage];
+      // 단일 클릭 시에도 해제 가능하도록 수정
+      return isAlreadySelected ? prev.filter(s => !(s.gpuId === usage.gpuId && s.user === usage.user && s.team === usage.team)) : [...prev, usage];
     });
+  };
+
+  // 선택 초기화 함수
+  const clearAllSelections = () => {
+    setSelectedGpuUsages([]);
+    setSelectedNode(null);
   };
 
   // 포커스 모드: Node별로 선택된 GPU 인덱스만 animatePulse, 전체 모드: Node 전체 animatePulse
@@ -1027,6 +1078,7 @@ export default function GPUDashboard() {
                 allNodes={allNodes}
                 searchFilterGPUType={searchFilterGPUType}
                 onFilterChange={setSearchFilterGPUType}
+                onClearSelections={clearAllSelections}
               />
             ) : selectedNode ? (
               <NodeGPUDetails
