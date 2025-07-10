@@ -529,28 +529,51 @@ const UsageBar = ({ percentage, color }: { percentage: number; color: string }) 
   </div>
 )
 
-// GPU 막대그래프 컴포넌트 (매칭된 부분만 천천히 깜빡임)
-const GPUProgressBar = ({ gpu, isHighlighted }: { gpu: GPU; isHighlighted?: boolean }) => (
-  <div className="flex h-full w-full gap-0 relative transition-all duration-300">
-    {Array(8)
-      .fill(0)
-      .map((_, i) => {
-      const isUsed = i < gpu.usage;
-      const bg = isUsed ? (isHighlighted ? "bg-blue-500" : "bg-gray-500") : "bg-gray-200"; // 포커스 모드에서 선택된 GPU는 파란색
-        return (
-          <div
-            key={i}
-            className={`
-              flex-1 rounded-none transition-all duration-300
-              border-[0.3px] border-gray-300
-              ${bg}
-              ${isUsed && isHighlighted ? "animate-[pulse_2s_ease-in-out_infinite]" : ""}
-            `}
-          />
-        )
-      })}
-  </div>
-)
+// GPU 막대그래프 컴포넌트 (포커스 모드에서 선택된 사용자의 사용량만 파란색으로 표시)
+const GPUProgressBar = ({
+  gpu,
+  isHighlighted,
+  highlightedUsage,
+}: {
+  gpu: GPU
+  isHighlighted?: boolean
+  highlightedUsage?: number
+}) => {
+  const totalBlocks = 8
+  const totalUsedBlocks = gpu.usage
+  const highlightedBlocks = isHighlighted && highlightedUsage ? Math.floor((highlightedUsage / 100) * totalBlocks) : 0
+
+  return (
+    <div className="flex h-full w-full gap-0 relative transition-all duration-300">
+      {Array(totalBlocks)
+        .fill(0)
+        .map((_, i) => {
+          const isHighlightedBlock = i < highlightedBlocks
+          const isUsedBlock = i < totalUsedBlocks
+
+          let bg = "bg-gray-200" // 미사용
+          if (isUsedBlock) {
+            bg = "bg-gray-500" // 다른 사용자 사용
+          }
+          if (isHighlightedBlock) {
+            bg = "bg-blue-500" // 선택된 사용자 사용
+          }
+
+          return (
+            <div
+              key={i}
+              className={`
+                flex-1 rounded-none transition-all duration-300
+                border-[0.3px] border-gray-300
+                ${bg}
+                ${isHighlightedBlock ? "animate-[pulse_2s_ease-in-out_infinite]" : ""}
+              `}
+            />
+          )
+        })}
+    </div>
+  )
+}
 
 
 
@@ -631,14 +654,14 @@ const NodeCard = ({
   isSelected,
   onSelect,
   animatePulse = false,
-  highlightedGpus = [],
+  highlightedGpuUsages = {},
 }: {
   node: Node;
   size: number;
   isSelected: boolean;
   onSelect: (node: Node) => void;
   animatePulse?: boolean;
-  highlightedGpus?: number[];
+  highlightedGpuUsages?: { [key: number]: number };
 }) => {
   const avgUsagePercent = node.avgUsage * 100
   const onlineGPUs = node.gpus.filter((gpu) => gpu.status === "active").length
@@ -707,7 +730,8 @@ const NodeCard = ({
           <div key={gpu.id} style={{ height: `${barHeight}px` }} className="w-full">
             <GPUProgressBar
               gpu={gpu}
-              isHighlighted={highlightedGpus.includes(index)}
+              isHighlighted={highlightedGpuUsages.hasOwnProperty(index)}
+              highlightedUsage={highlightedGpuUsages[index]}
             />
           </div>
         ))}
@@ -991,20 +1015,25 @@ export default function GPUDashboard() {
   const clearAllSelections = () => {
     setSelectedGpuUsages([]);
     setSelectedNode(null);
+    setFocusMode(false); // 포커스 모드 해제
   };
 
-  // 포커스 모드: Node별로 선택된 GPU 인덱스만 animatePulse, 전체 모드: Node 전체 animatePulse
+  // 포커스 모드: Node별로 선택된 GPU 인덱스 및 사용량 계산, 전체 모드: Node 전체 animatePulse
   function getNodeCardProps(node: Node) {
     if (focusMode) {
-      // 포커스 모드: GPU별 animatePulse
-      const highlightedGpus = selectedGpuUsages
+      // 포커스 모드: GPU별 하이라이트 및 사용량 전달
+      const highlightedGpuUsages: { [key: number]: number } = {};
+      selectedGpuUsages
         .filter(u => u.nodeId === node.id)
-        .map(u => u.gpuIndex);
-      return { highlightedGpus, animatePulse: false, pulseColor: "blue" };
+        .forEach(u => {
+          // 동일 GPU에 여러 사용자가 선택된 경우 사용량을 합산
+          highlightedGpuUsages[u.gpuIndex] = (highlightedGpuUsages[u.gpuIndex] || 0) + u.segmentUsage;
+        });
+      return { highlightedGpuUsages, animatePulse: false };
     } else {
       // 전체 모드: Node 전체 animatePulse
       const animatePulse = selectedNodeIds.has(node.id) && selectedGpuUsages.length > 0;
-      return { highlightedGpus: [], animatePulse };
+      return { highlightedGpuUsages: {}, animatePulse };
     }
   }
 
@@ -1021,14 +1050,14 @@ export default function GPUDashboard() {
         {/* 헤더 */}
         <div className="mb-6">
           <div className="flex justify-between items-center mb-4">
-            <h1 className="text-2xl font-bold text-gray-900">GPU 클러스터 대시보드</h1>
+            <h1 className="text-2xl font-bold text-gray-900">GPU Monitoring Dashboard</h1>
             <div className="flex items-center gap-4">
               {/* 검색창 */}
               <div className="relative">
                 <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-4 h-4" />
                 <Input
                   type="text"
-                  placeholder="복합검색: 노드명/팀명/사용자명 (예: A100-2/음성/박민)"
+                  placeholder="노드/프로젝트/이름 (예: A30-01/음성/홍길동)"
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
                   className="pl-10 w-80"
@@ -1134,7 +1163,7 @@ export default function GPUDashboard() {
                 }}
               >
                 {leftNodes.map((node) => {
-                  const { highlightedGpus, animatePulse, pulseColor } = getNodeCardProps(node);
+                  const { highlightedGpuUsages, animatePulse } = getNodeCardProps(node);
                   return (
                     <NodeCard
                       key={node.id}
@@ -1143,7 +1172,7 @@ export default function GPUDashboard() {
                       isSelected={selectedNode?.id === node.id}
                       onSelect={setSelectedNode}
                       animatePulse={animatePulse}
-                      highlightedGpus={highlightedGpus}
+                      highlightedGpuUsages={highlightedGpuUsages}
                     />
                   )
                 })}
