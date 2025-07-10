@@ -55,6 +55,19 @@ interface SearchResult {
   matchingSegments: { [gpuIndex: number]: number[] } // GPU별 매칭되는 세그먼트 인덱스들
 }
 
+// --- 신규 타입 정의 (사용자 검색 전용) ---
+interface UserGPUUsage {
+  nodeId: string;
+  nodeName: string;
+  gpuId: string;
+  gpuIndex: number;
+  user: string;
+  team: string;
+  totalUsage: number; // GPU 전체 사용량 %
+  segmentUsage: number; // 이 사용자가 해당 GPU에서 차지하는 %
+  gpuType: GPUType;
+}
+
 // GPU 타입별 노드 개수 설정
 const GPU_NODE_COUNTS: Record<GPUType, number> = {
   H200: 4,
@@ -68,6 +81,10 @@ const GPU_NODE_COUNTS: Record<GPUType, number> = {
 const getGridSize = (nodeCount: number) => {
   const sqrt = Math.ceil(Math.sqrt(nodeCount))
   return sqrt
+}
+
+function getOptimalGridSize(n: number) {
+  return Math.ceil(Math.sqrt(n));
 }
 
 // 샘플 사용자/팀 데이터
@@ -281,6 +298,119 @@ const performComplexSearch = (nodes: Node[], searchTerm: string): SearchResult[]
   return results
 }
 
+// --- 사용자/팀 GPU 사용 현황 검색 함수 복구 ---
+const findGpusByUserOrTeam = (nodes: Node[], searchTerm: string): UserGPUUsage[] => {
+  if (!searchTerm.trim()) return [];
+  const lowercasedSearchTerm = searchTerm.toLowerCase();
+  const results: UserGPUUsage[] = [];
+  nodes.forEach((node) => {
+    node.gpus.forEach((gpu, gpuIndex) => {
+      if (gpu.status === 'active') {
+        gpu.segments.forEach((segment) => {
+          if (
+            segment.user.toLowerCase().includes(lowercasedSearchTerm) ||
+            segment.team.toLowerCase().includes(lowercasedSearchTerm)
+          ) {
+            results.push({
+              nodeId: node.id,
+              nodeName: node.name,
+              gpuId: gpu.id,
+              gpuIndex: gpuIndex,
+              user: segment.user,
+              team: segment.team,
+              totalUsage: gpu.totalUsage,
+              segmentUsage: segment.usage,
+              gpuType: node.gpuType,
+            });
+          }
+        });
+      }
+    });
+  });
+  const uniqueResults = Array.from(new Map(results.map(item => [item.gpuId + item.user + item.team, item])).values());
+  return uniqueResults.sort((a,b) => a.nodeName.localeCompare(b.nodeName));
+};
+
+// --- UserSearchResultsPanel 복구 ---
+const UserSearchResultsPanel = ({
+  results,
+  selected,
+  onSelect,
+  containerHeight,
+  allNodes,
+}: {
+  results: UserGPUUsage[];
+  selected: UserGPUUsage[];
+  onSelect: (usage: UserGPUUsage, isCtrlPressed: boolean) => void;
+  containerHeight: number;
+  allNodes: Node[];
+}) => {
+  // GPU 타입별 합산
+  const summary = results.reduce((acc, cur) => {
+    acc[cur.gpuType] = (acc[cur.gpuType] || 0) + cur.segmentUsage / 100;
+    return acc;
+  }, {} as Record<GPUType, number>);
+  const userOrTeam = results[0]?.user || results[0]?.team || "";
+  // Node 객체 찾기
+  const getNodeById = (nodeId: string) => allNodes.find(n => n.id === nodeId);
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <CardTitle className="text-lg flex items-center justify-between">
+          <span>검색 결과: {results.length}개 GPU 사용 중</span>
+        </CardTitle>
+        {/* 상단 요약 박스 */}
+        {Object.keys(summary).length > 0 && (
+          <div className="mt-2 mb-1 p-3 bg-blue-50 rounded border border-blue-200 text-sm text-blue-900 font-semibold flex flex-wrap gap-4">
+            <span className="mr-2">{userOrTeam}님의 전체 사용량:</span>
+            {Object.entries(summary).filter(([type, val]) => val > 0 && type !== '전체').map(([type, val]) => (
+              <span key={type} className="mr-2">
+                {type}: {val.toFixed(2)}장
+              </span>
+            ))}
+          </div>
+        )}
+      </CardHeader>
+      <CardContent style={{ height: `${containerHeight - 76}px` }} className="overflow-y-auto">
+        <div className="space-y-4">
+          {results.map((usage) => {
+            const node = getNodeById(usage.nodeId);
+            const gpu = node ? node.gpus[usage.gpuIndex] : undefined;
+            const isSelected = selected.some(s => s.gpuId === usage.gpuId && s.user === usage.user && s.team === usage.team);
+            return (
+              <div
+                key={usage.gpuId + usage.user + usage.team}
+                onClick={e => onSelect(usage, e.ctrlKey || e.metaKey)}
+                className={`p-4 border rounded-lg cursor-pointer transition-all duration-200 flex flex-col gap-2 ${isSelected ? "bg-blue-100 border-blue-400 shadow" : "bg-white hover:bg-blue-50"}`}
+                style={{ position: 'relative' }}
+              >
+                <div className="flex items-center justify-between mb-1">
+                  <div className="font-bold text-gray-800">
+                    {usage.nodeName} - GPU {usage.gpuIndex + 1} <span className="ml-2 text-xs text-blue-700 font-semibold">{usage.gpuType}</span>
+                  </div>
+                </div>
+                {/* 실제 상세 바 */}
+                {gpu && (
+                  <div className="mb-2">
+                    <DetailedGPUBar gpu={gpu} matchingSegmentIndexes={[
+                      gpu.segments.findIndex((seg: GPUSegment) => seg.user === usage.user && seg.team === usage.team)
+                    ]} />
+                  </div>
+                )}
+                <div className="flex items-center justify-between text-sm text-gray-600 mt-1">
+                  <span className="flex items-center gap-1.5">{usage.user} ({usage.team})</span>
+                  <span className="font-semibold text-blue-600 flex items-center gap-1">
+                    {usage.segmentUsage}% 사용 ({(usage.segmentUsage/100).toFixed(2)}장)
+                  </span>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </CardContent>
+    </Card>
+  );
+};
 
 // Node 상태에 따른 테두리 색상
 const getNodeBorderColor = (status: string) => {
@@ -402,13 +532,15 @@ const NodeCard = ({
   size,
   isSelected,
   onSelect,
-  searchResult,
+  animatePulse = false,
+  highlightedGpus = [],
 }: {
-  node: Node
-  size: number
-  isSelected: boolean
-  onSelect: (node: Node) => void
-  searchResult?: SearchResult
+  node: Node;
+  size: number;
+  isSelected: boolean;
+  onSelect: (node: Node) => void;
+  animatePulse?: boolean;
+  highlightedGpus?: number[];
 }) => {
   const avgUsagePercent = node.avgUsage * 100
   const onlineGPUs = node.gpus.filter((gpu) => gpu.status === "active").length
@@ -429,7 +561,7 @@ const NodeCard = ({
     `
 
     // 전체 노드 매칭 시에만 노드 전체 깜빡임
-    if (searchResult?.isFullNodeMatch) {
+    if (animatePulse) {
       baseStyle += ` 
         animate-[pulse_2s_ease-in-out_infinite]
         bg-gradient-to-br from-yellow-100 via-orange-100 to-yellow-100
@@ -459,25 +591,17 @@ const NodeCard = ({
         {errorGPUs > 0 && <div className="text-red-300">{errorGPUs} GPU errors</div>}
         {idleGPUs > 0 && <div className="text-yellow-300">{idleGPUs} GPU idle</div>}
         <div>Status: {node.status}</div>
-        {searchResult && (
-          <div className="mt-2 border-t border-gray-600 pt-2">
-            <div className={`font-bold ${searchResult.isFullNodeMatch ? "text-yellow-300" : "text-orange-300"}`}>
-              🔍 {searchResult.isFullNodeMatch ? "전체 매칭" : "부분 매칭"}
-            </div>
-            <div className="text-yellow-200">매칭 GPU: {searchResult.matchingGPUs.map((i) => i + 1).join(", ")}</div>
-          </div>
-        )}
       </div>
 
       {/* 노드 이름 */}
       <div
         className={`
         absolute top-1 left-1 text-[10px] font-semibold transition-all duration-300
-        ${searchResult?.isFullNodeMatch ? "text-yellow-800 font-bold" : "text-gray-800"}
+        ${isSelected ? "text-blue-800 font-bold" : "text-gray-800"}
       `}
       >
         {node.name}
-        {searchResult?.isFullNodeMatch && <span className="ml-1 text-yellow-600">🔍</span>}
+        {animatePulse && <span className="ml-1 text-blue-600">🔍</span>}
       </div>
 
       {/* 평균 사용량 */}
@@ -488,7 +612,7 @@ const NodeCard = ({
           <div key={gpu.id} style={{ height: `${barHeight}px` }} className="w-full">
             <GPUProgressBar
               gpu={gpu}
-              isHighlighted={!searchResult?.isFullNodeMatch && searchResult?.matchingGPUs.includes(index)}
+              isHighlighted={highlightedGpus.includes(index)}
             />
           </div>
         ))}
@@ -534,96 +658,66 @@ const JobItem = ({ job }: { job: Job }) => {
 const NodeGPUDetails = ({
   node,
   containerHeight,
-  searchResult,
 }: {
   node: Node
   containerHeight: number
-  searchResult?: SearchResult
 }) => {
   return (
     <Card
-      className={
-        searchResult?.isFullNodeMatch
-          ? "animate-[pulse_2s_ease-in-out_infinite] bg-gradient-to-br from-yellow-50 to-orange-50"
-          : ""
-      }
+      className="animate-[pulse_2s_ease-in-out_infinite] bg-gradient-to-br from-yellow-50 to-orange-50"
     >
       <CardHeader className="pb-3">
         <CardTitle className="text-lg flex items-center justify-between">
           <span className="flex items-center gap-2">
             {node.name} GPU 사용 현황
-            {searchResult?.isFullNodeMatch && <span className="text-yellow-600">🔍 전체매칭</span>}
           </span>
-          {searchResult && (
-            <span
-              className={`
-              text-sm px-3 py-1 rounded-full font-semibold
-              ${searchResult.isFullNodeMatch ? "text-yellow-700 bg-yellow-200" : "text-orange-700 bg-orange-200"}
-            `}
-            >
-              검색 매칭: {searchResult.matchingGPUs.length}/{node.gpus.length} GPU
-            </span>
-          )}
         </CardTitle>
       </CardHeader>
       <CardContent style={{ height: `${containerHeight - 80}px` }} className="overflow-y-auto">
         <div className="space-y-4">
           {node.gpus.map((gpu, index) => {
-            const matchingSegmentIndexes = searchResult?.matchingSegments[index]
-            const isGPUMatching = searchResult?.matchingGPUs.includes(index)
-
             return (
               <div key={gpu.id} className="space-y-2">
                 <div className="flex items-center justify-between">
                   <div
                     className={`
                     text-sm font-mono font-semibold flex items-center gap-2
-                    ${isGPUMatching ? "text-yellow-700 bg-yellow-100 px-2 py-1 rounded-lg" : "text-gray-700"}
+                    text-gray-700
                   `}
                   >
                     GPU-{index + 1}
-                    {isGPUMatching && (
-                      <span className="text-xs bg-yellow-300 text-yellow-800 px-2 py-0.5 rounded-full font-bold">
-                        🔍 매칭
-                      </span>
-                    )}
                   </div>
                   <div
                     className={`
                   text-sm font-semibold
-                  ${isGPUMatching ? "text-yellow-700" : "text-gray-900"}
+                  text-gray-900
                 `}
                   >
                     {gpu.totalUsage}%
                   </div>
                 </div>
-                <DetailedGPUBar gpu={gpu} matchingSegmentIndexes={matchingSegmentIndexes} />
+                <DetailedGPUBar gpu={gpu} matchingSegmentIndexes={[]} />
                 {gpu.segments.length > 0 && (
                   <div
                     className={`
                   text-xs pl-2 transition-all duration-300
-                  ${
-                    isGPUMatching
-                      ? "text-yellow-700 bg-yellow-50 p-2 rounded border-l-4 border-yellow-400"
-                      : "text-gray-500"
-                  }
+                  text-gray-500
                 `}
                   >
                     {gpu.segments.map((segment, segIndex) => {
-                      const isSegmentMatching = matchingSegmentIndexes?.includes(segIndex)
                       return (
                         <div key={segIndex} className="flex items-center gap-2">
                           <div
                             className={`
                             w-2 h-2 rounded-full
-                            ${isSegmentMatching ? "bg-yellow-500 animate-[pulse_2s_ease-in-out_infinite]" : "bg-blue-500"}
+                            bg-blue-500
                           `}
                             style={{
-                              animationDelay: isSegmentMatching ? `${segIndex * 0.3}s` : undefined,
+                              animationDelay: undefined,
                             }}
                           ></div>
                           <span
-                            className={isSegmentMatching ? "font-semibold animate-[pulse_2s_ease-in-out_infinite]" : ""}
+                            className=""
                           >
                             {segment.user} ({segment.team}) - {segment.usage}%
                           </span>
@@ -649,11 +743,22 @@ export default function GPUDashboard() {
   const [selectedNode, setSelectedNode] = useState<Node | null>(null)
   const [searchTerm, setSearchTerm] = useState("")
   const [currentTime, setCurrentTime] = useState(new Date())
+  const [focusMode, setFocusMode] = useState(false);
+  const [selectedGpuUsages, setSelectedGpuUsages] = useState<UserGPUUsage[]>([]); // 초기값 빈 배열
 
   useEffect(() => {
     const timer = setInterval(() => setCurrentTime(new Date()), 1000)
     return () => clearInterval(timer)
   }, [])
+
+  useEffect(() => {
+    if (searchTerm.trim()) {
+      setSelectedGpuUsages([]); // 검색 결과가 바뀌면 항상 빈 배열로 초기화(자동 선택 X)
+    } else {
+       setSelectedGpuUsages([]);
+    }
+    setSelectedNode(null);
+  }, [searchTerm, allNodes]);
 
   const gpuTypes: GPUType[] = ["전체","A100", "A30", "H100", "H200"]
 
@@ -677,16 +782,20 @@ export default function GPUDashboard() {
       ? allJobs
       : allJobs.filter((job) => job.gpuType === selectedGPUType)
 
-  const gridSize = getGridSize(displayNodes.length)
-  const containerSize = 700
-  const nodeSize = Math.floor((containerSize - (gridSize + 1) * 2) / gridSize)
+  // 선택된 GPU가 속한 Node id 집합
+  const selectedNodeIds = new Set(selectedGpuUsages.map(u => u.nodeId));
 
-  // 선택된 노드의 검색 결과 찾기
-  const selectedNodeSearchResult = selectedNode
-    ? searchResults.find((result) => result.node.id === selectedNode.id)
-    : undefined
+  // 포커스 모드: 선택된 Node만, 전체 모드: 전체 Node(선택된 Node는 앞쪽에)
+  let leftNodes: Node[];
+  if (focusMode) {
+    leftNodes = allNodes.filter(n => selectedNodeIds.has(n.id));
+  } else {
+    const selectedNodes = allNodes.filter(n => selectedNodeIds.has(n.id));
+    const unselectedNodes = allNodes.filter(n => !selectedNodeIds.has(n.id));
+    leftNodes = [...selectedNodes, ...unselectedNodes];
+  }
 
-  // CPU/Memory 통계 계산
+  // CPU/Memory 통계 계산 (기존 로직)
   const cpuMemoryStats = selectedNode
     ? {
         cpuUsage: selectedNode.cpuUsage,
@@ -695,13 +804,45 @@ export default function GPUDashboard() {
         isSelected: true,
       }
     : {
-        cpuUsage: Math.round(displayNodes.reduce((sum, node) => sum + node.cpuUsage, 0) / (displayNodes.length || 1)),
+        cpuUsage: Math.round(leftNodes.reduce((sum, node) => sum + node.cpuUsage, 0) / (leftNodes.length || 1)),
         memoryUsage: Math.round(
-          displayNodes.reduce((sum, node) => sum + node.memoryUsage, 0) / (displayNodes.length || 1),
+          leftNodes.reduce((sum, node) => sum + node.memoryUsage, 0) / (leftNodes.length || 1),
         ),
-        nodeName: `${selectedGPUType} 클러스터 평균`,
+        nodeName: focusMode ? '선택 노드 평균' : `${selectedGPUType} 클러스터 평균`,
         isSelected: false,
+      };
+
+  // 그리드 사이즈 동적 계산
+  const gridSize = focusMode ? getOptimalGridSize(leftNodes.length) : getGridSize(leftNodes.length);
+  const containerSize = 700;
+  const nodeSize = leftNodes.length > 0 ? Math.floor((containerSize - (gridSize + 1) * 2) / gridSize) : 0;
+
+  // GPU 카드 클릭 핸들러 (Ctrl+Click 지원)
+  const handleGpuUsageSelect = (usage: UserGPUUsage, isCtrlPressed: boolean) => {
+    setSelectedNode(null);
+    setSelectedGpuUsages(prev => {
+      const isAlreadySelected = prev.some(s => s.gpuId === usage.gpuId && s.user === usage.user && s.team === usage.team);
+      if (isCtrlPressed) {
+        return isAlreadySelected ? prev.filter(s => !(s.gpuId === usage.gpuId && s.user === usage.user && s.team === usage.team)) : [...prev, usage];
       }
+      return isAlreadySelected && prev.length === 1 ? [] : [usage];
+    });
+  };
+
+  // 포커스 모드: Node별로 선택된 GPU 인덱스만 animatePulse, 전체 모드: Node 전체 animatePulse
+  function getNodeCardProps(node: Node) {
+    if (focusMode) {
+      // 포커스 모드: GPU별 animatePulse
+      const highlightedGpus = selectedGpuUsages
+        .filter(u => u.nodeId === node.id)
+        .map(u => u.gpuIndex);
+      return { highlightedGpus, animatePulse: false };
+    } else {
+      // 전체 모드: Node 전체 animatePulse
+      const animatePulse = selectedNodeIds.has(node.id) && selectedGpuUsages.length > 0;
+      return { highlightedGpus: [], animatePulse };
+    }
+  }
 
   return (
     <div className="min-h-screen bg-gray-50 p-4">
@@ -797,21 +938,20 @@ export default function GPUDashboard() {
         <div className="flex gap-6">
           {/* 왼쪽: 노드 그리드 */}
           <div className="flex-shrink-0">
-            <div className="mb-2 text-sm text-gray-600 flex justify-between items-center">
-              <span>
-                {searchTerm.trim() ? `검색 결과 (${searchResults.length}개 매칭)` : "사용량 높은 순서로 정렬"}
-              </span>
-              {searchTerm.trim() && (
-                <div className="flex items-center gap-2">
-                  <span className="text-yellow-600">
-                    전체 매칭: {searchResults.filter((r) => r.isFullNodeMatch).length}개
-                  </span>
-                  <span className="text-orange-600">
-                    부분 매칭: {searchResults.filter((r) => !r.isFullNodeMatch).length}개
-                  </span>
-                </div>
-              )}
-            </div>
+            {/* 모드 전환 버튼 */}
+            {selectedGpuUsages.length > 0 && (
+              <div className="flex items-center gap-2 mb-2">
+                <Button
+                  variant={!focusMode ? 'default' : 'outline'}
+                  onClick={() => setFocusMode(false)}
+                >전체 모드</Button>
+                <Button
+                  variant={focusMode ? 'default' : 'outline'}
+                  disabled={selectedGpuUsages.length === 0}
+                  onClick={() => setFocusMode(true)}
+                >포커스 모드</Button>
+              </div>
+            )}
             <div className="bg-white rounded-lg p-2 shadow-sm">
               <div
                 className="grid"
@@ -822,8 +962,8 @@ export default function GPUDashboard() {
                   gap: "2px",
                 }}
               >
-                {displayNodes.map((node) => {
-                  const searchResult = searchResults.find((result) => result.node.id === node.id)
+                {leftNodes.map((node) => {
+                  const { highlightedGpus, animatePulse } = getNodeCardProps(node);
                   return (
                     <NodeCard
                       key={node.id}
@@ -831,11 +971,12 @@ export default function GPUDashboard() {
                       size={nodeSize}
                       isSelected={selectedNode?.id === node.id}
                       onSelect={setSelectedNode}
-                      searchResult={searchResult}
+                      animatePulse={animatePulse}
+                      highlightedGpus={highlightedGpus}
                     />
                   )
                 })}
-                {Array.from({ length: gridSize * gridSize - displayNodes.length }, (_, i) => (
+                {Array.from({ length: gridSize * gridSize - leftNodes.length }, (_, i) => (
                   <div
                     key={`empty-${i}`}
                     style={{ width: `${nodeSize}px`, height: `${nodeSize}px` }}
@@ -845,14 +986,20 @@ export default function GPUDashboard() {
               </div>
             </div>
           </div>
-
-          {/* 오른쪽: 선택된 노드 상세 정보 또는 대기중인 Job Queue */}
+          {/* 오른쪽: 검색창이 있을 때만 UserSearchResultsPanel, 없으면 기존 대기열/노드 상세 */}
           <div className="flex-1 space-y-4">
-            {selectedNode ? (
+            {searchTerm.trim() ? (
+              <UserSearchResultsPanel
+                results={findGpusByUserOrTeam(allNodes, searchTerm)}
+                selected={selectedGpuUsages}
+                onSelect={handleGpuUsageSelect}
+                containerHeight={containerSize + 4}
+                allNodes={allNodes}
+              />
+            ) : selectedNode ? (
               <NodeGPUDetails
                 node={selectedNode}
                 containerHeight={containerSize + 4}
-                searchResult={selectedNodeSearchResult}
               />
             ) : (
               <Card>
@@ -877,7 +1024,6 @@ export default function GPUDashboard() {
             )}
           </div>
         </div>
-
         {/* 범례 */}
         <div className="mt-6 bg-white rounded-lg p-4 shadow-sm">
           <h4 className="text-lg font-medium text-gray-700 mb-3">범례</h4>
@@ -927,7 +1073,7 @@ export default function GPUDashboard() {
                   <span className="text-yellow-600">매칭 사용자 세그먼트</span>
                 </div>
                 <div className="text-xs text-gray-500 mt-2 bg-gray-50 p-2 rounded">
-                  💡 복합검색: 조건1/조건2/조건3
+                  �� 복합검색: 조건1/조건2/조건3
                   <br />✨ 매칭된 사용자 부분만 천천히 깜빡임 (2초 주기)
                 </div>
               </div>
