@@ -332,15 +332,19 @@ const findGpusByUserOrTeam = (nodes: Node[], searchTerm: string): UserGPUUsage[]
     node.gpus.forEach((gpu, gpuIndex) => {
       if (gpu.status === 'active') {
         gpu.segments.forEach((segment) => {
-          // 모든 검색어가 사용자명, 팀명, 또는 GPU 타입에 포함되는지 확인
+          // 모든 검색어가 사용자명, 팀명, GPU 타입, 노드명, 노드ID에 포함되는지 확인
           const userLower = segment.user.toLowerCase();
           const teamLower = segment.team.toLowerCase();
           const gpuTypeLower = node.gpuType.toLowerCase();
+          const nodeNameLower = node.name.toLowerCase();
+          const nodeIdLower = node.id.toLowerCase();
           
           const allTermsMatch = searchTerms.every(term => 
             userLower.includes(term) || 
             teamLower.includes(term) || 
-            gpuTypeLower.includes(term)
+            gpuTypeLower.includes(term) ||
+            nodeNameLower.includes(term) ||
+            nodeIdLower.includes(term)
           );
           
           if (allTermsMatch) {
@@ -655,6 +659,7 @@ const NodeCard = ({
   onSelect,
   animatePulse = false,
   highlightedGpuUsages = {},
+  isSelectedByGpuClick = false,
 }: {
   node: Node;
   size: number;
@@ -662,6 +667,7 @@ const NodeCard = ({
   onSelect: (node: Node) => void;
   animatePulse?: boolean;
   highlightedGpuUsages?: { [key: number]: number };
+  isSelectedByGpuClick?: boolean;
 }) => {
   const avgUsagePercent = node.avgUsage * 100
   const onlineGPUs = node.gpus.filter((gpu) => gpu.status === "active").length
@@ -686,6 +692,9 @@ const NodeCard = ({
         bg-gradient-to-br from-yellow-100 via-orange-100 to-yellow-100
         shadow-xl shadow-yellow-500/50
       `
+    }
+    if (isSelectedByGpuClick) {
+      baseStyle += ` border-4 border-blue-400 shadow-2xl shadow-blue-300/40 animate-[pulse_1.5s_ease-in-out_infinite] z-20`;
     }
     return baseStyle
   }
@@ -974,6 +983,16 @@ export default function GPUDashboard() {
     leftNodes = [...selectedNodes, ...unselectedNodes];
   }
 
+  // 전체모드에서 GPU 클릭 시 해당 Node들을 모두 맨 앞으로 정렬
+  let leftNodesSorted = leftNodes;
+  let selectedNodeIdsByGpuClick: Set<string> = new Set();
+  if (!focusMode && selectedGpuUsages.length > 0) {
+    selectedNodeIdsByGpuClick = new Set(selectedGpuUsages.map(u => u.nodeId));
+    const selectedNodes = leftNodes.filter(n => selectedNodeIdsByGpuClick.has(n.id));
+    const unselectedNodes = leftNodes.filter(n => !selectedNodeIdsByGpuClick.has(n.id));
+    leftNodesSorted = [...selectedNodes, ...unselectedNodes];
+  }
+
   // CPU/Memory 통계 계산 (기존 로직)
   const cpuMemoryStats = selectedNode
     ? {
@@ -1043,6 +1062,16 @@ export default function GPUDashboard() {
         searchFilterGPUType === "전체" || result.gpuType === searchFilterGPUType
       )
     : [];
+
+  // 전체모드에서 검색 결과 GPU 하이라이트 정보 생성
+  let highlightGpuUsagesByNode: { [nodeId: string]: { [gpuIndex: number]: number } } = {};
+  if (!focusMode && searchTerm.trim()) {
+    // 검색 결과에서 노드별, GPU별로 segmentUsage 합산
+    filteredSearchResults.forEach(u => {
+      if (!highlightGpuUsagesByNode[u.nodeId]) highlightGpuUsagesByNode[u.nodeId] = {};
+      highlightGpuUsagesByNode[u.nodeId][u.gpuIndex] = (highlightGpuUsagesByNode[u.nodeId][u.gpuIndex] || 0) + u.segmentUsage;
+    });
+  }
 
   return (
     <div className="min-h-screen bg-gray-50 p-4">
@@ -1162,20 +1191,32 @@ export default function GPUDashboard() {
                   gap: "2px",
                 }}
               >
-                {leftNodes.map((node) => {
-                  const { highlightedGpuUsages, animatePulse } = getNodeCardProps(node);
-                  return (
-                    <NodeCard
-                      key={node.id}
-                      node={node}
-                      size={nodeSize}
-                      isSelected={selectedNode?.id === node.id}
-                      onSelect={setSelectedNode}
-                      animatePulse={animatePulse}
-                      highlightedGpuUsages={highlightedGpuUsages}
-                    />
-                  )
-                })}
+                {leftNodesSorted.map((node) => {
+                   // 전체모드+검색중이면 highlightGpuUsagesByNode 사용, 아니면 기존 방식
+                   let highlightedGpuUsages = {};
+                   let animatePulse = false;
+                   if (!focusMode && searchTerm.trim()) {
+                     highlightedGpuUsages = highlightGpuUsagesByNode[node.id] || {};
+                   } else {
+                     const props = getNodeCardProps(node);
+                     highlightedGpuUsages = props.highlightedGpuUsages;
+                     animatePulse = props.animatePulse;
+                   }
+                   // 전체모드에서 GPU 클릭 시 해당 Node 하이라이트 (여러개)
+                   const isSelectedByGpuClick = !focusMode && selectedNodeIdsByGpuClick.has(node.id);
+                   return (
+                     <NodeCard
+                       key={node.id}
+                       node={node}
+                       size={nodeSize}
+                       isSelected={selectedNode?.id === node.id}
+                       onSelect={setSelectedNode}
+                       animatePulse={animatePulse}
+                       highlightedGpuUsages={highlightedGpuUsages}
+                       isSelectedByGpuClick={isSelectedByGpuClick}
+                     />
+                   )
+                 })}
                 {Array.from({ length: gridSize * gridSize - leftNodes.length }, (_, i) => (
                   <div
                     key={`empty-${i}`}
