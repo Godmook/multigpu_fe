@@ -903,10 +903,12 @@ export default function GPUDashboard() {
     setSelectedGpuUsages(prev => {
       const isAlreadySelected = prev.some(s => s.gpuId === usage.gpuId && s.user === usage.user && s.team === usage.team);
       if (isCtrlPressed) {
+        // Ctrl+Click: 다중 선택/해제
         return isAlreadySelected ? prev.filter(s => !(s.gpuId === usage.gpuId && s.user === usage.user && s.team === usage.team)) : [...prev, usage];
+      } else {
+        // 단일 클릭: 단일 선택 (기존 선택 해제 후 새로 선택)
+        return [usage];
       }
-      // 단일 클릭 시에도 해제 가능하도록 수정
-      return isAlreadySelected ? prev.filter(s => !(s.gpuId === usage.gpuId && s.user === usage.user && s.team === usage.team)) : [...prev, usage];
     });
   };
 
