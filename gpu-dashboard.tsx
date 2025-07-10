@@ -338,12 +338,16 @@ const UserSearchResultsPanel = ({
   onSelect,
   containerHeight,
   allNodes,
+  searchFilterGPUType,
+  onFilterChange,
 }: {
   results: UserGPUUsage[];
   selected: UserGPUUsage[];
   onSelect: (usage: UserGPUUsage, isCtrlPressed: boolean) => void;
   containerHeight: number;
   allNodes: Node[];
+  searchFilterGPUType: GPUType;
+  onFilterChange: (type: GPUType) => void;
 }) => {
   // GPU 타입별 합산
   const summary = results.reduce((acc, cur) => {
@@ -353,12 +357,32 @@ const UserSearchResultsPanel = ({
   const userOrTeam = results[0]?.user || results[0]?.team || "";
   // Node 객체 찾기
   const getNodeById = (nodeId: string) => allNodes.find(n => n.id === nodeId);
+  
+  const gpuTypes: GPUType[] = ["전체", "A100", "A30", "H100", "H200"];
+  
   return (
     <Card>
       <CardHeader className="pb-3">
         <CardTitle className="text-lg flex items-center justify-between">
           <span>검색 결과: {results.length}개 GPU 사용 중</span>
         </CardTitle>
+        {/* GPU 타입별 필터링 버튼 */}
+        <div className="flex gap-2 mt-2">
+          {gpuTypes.map((gpuType) => {
+            const typeResults = results.filter(r => gpuType === "전체" || r.gpuType === gpuType);
+            return (
+              <Button
+                key={gpuType}
+                variant={searchFilterGPUType === gpuType ? "default" : "outline"}
+                size="sm"
+                onClick={() => onFilterChange(gpuType)}
+                className="text-xs"
+              >
+                {gpuType} ({typeResults.length})
+              </Button>
+            );
+          })}
+        </div>
         {/* 상단 요약 박스 */}
         {Object.keys(summary).length > 0 && (
           <div className="mt-2 mb-1 p-3 bg-blue-50 rounded border border-blue-200 text-sm text-blue-900 font-semibold flex flex-wrap gap-4">
@@ -742,6 +766,7 @@ export default function GPUDashboard() {
   const [currentTime, setCurrentTime] = useState(new Date())
   const [focusMode, setFocusMode] = useState(false);
   const [selectedGpuUsages, setSelectedGpuUsages] = useState<UserGPUUsage[]>([]); // 초기값 빈 배열
+  const [searchFilterGPUType, setSearchFilterGPUType] = useState<GPUType>("전체"); // 검색 결과 필터링용
 
   useEffect(() => {
     const timer = setInterval(() => setCurrentTime(new Date()), 1000)
@@ -751,6 +776,7 @@ export default function GPUDashboard() {
   useEffect(() => {
     if (searchTerm.trim()) {
       setSelectedGpuUsages([]); // 검색 결과가 바뀌면 항상 빈 배열로 초기화(자동 선택 X)
+      setSearchFilterGPUType("전체"); // 검색 시 필터 초기화
     } else {
        setSelectedGpuUsages([]);
     }
@@ -765,8 +791,8 @@ export default function GPUDashboard() {
       ? allNodes
       : allNodes.filter((node) => node.gpuType === selectedGPUType)
 
-  // 복합 검색 수행
-  const searchResults = performComplexSearch(typeFilteredNodes, searchTerm)
+  // 복합 검색 수행 (검색 시에는 전체 노드에서 검색)
+  const searchResults = performComplexSearch(allNodes, searchTerm)
 
   // 최종 표시할 노드들 (검색 결과가 있으면 검색 결과만, 없으면 전체)
   const displayNodes = searchTerm.trim()
@@ -841,6 +867,13 @@ export default function GPUDashboard() {
     }
   }
 
+  // 검색 결과 필터링
+  const filteredSearchResults = searchTerm.trim() 
+    ? findGpusByUserOrTeam(allNodes, searchTerm).filter(result => 
+        searchFilterGPUType === "전체" || result.gpuType === searchFilterGPUType
+      )
+    : [];
+
   return (
     <div className="min-h-screen bg-gray-50 p-4">
       <div className="max-w-full mx-auto">
@@ -881,7 +914,7 @@ export default function GPUDashboard() {
                   onClick={() => {
                     setSelectedGPUType(gpuType)
                     setSelectedNode(null)
-                    setSearchTerm("") // GPU 타입 변경 시 검색 초기화
+                    // GPU 타입 변경 시 검색 초기화하지 않음
                   }}
                   className="flex flex-col items-center p-3 h-auto"
                 >
@@ -987,11 +1020,13 @@ export default function GPUDashboard() {
           <div className="flex-1 space-y-4">
             {searchTerm.trim() ? (
               <UserSearchResultsPanel
-                results={findGpusByUserOrTeam(allNodes, searchTerm)}
+                results={filteredSearchResults}
                 selected={selectedGpuUsages}
                 onSelect={handleGpuUsageSelect}
                 containerHeight={containerSize + 4}
                 allNodes={allNodes}
+                searchFilterGPUType={searchFilterGPUType}
+                onFilterChange={setSearchFilterGPUType}
               />
             ) : selectedNode ? (
               <NodeGPUDetails
@@ -1070,7 +1105,7 @@ export default function GPUDashboard() {
                   <span className="text-yellow-600">매칭 사용자 세그먼트</span>
                 </div>
                 <div className="text-xs text-gray-500 mt-2 bg-gray-50 p-2 rounded">
-                  �� 복합검색: 조건1/조건2/조건3
+                  🔍 복합검색: 조건1/조건2/조건3
                   <br />✨ 매칭된 사용자 부분만 천천히 깜빡임 (2초 주기)
                 </div>
               </div>
