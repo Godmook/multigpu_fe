@@ -6,7 +6,8 @@ import { useState, useEffect } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Search, Zap, User, Clock, Maximize2, Minimize2 } from "lucide-react"
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
+import { Search, Zap, User, Clock, Maximize2, Minimize2, PlusCircle } from "lucide-react"
 
 import type {
   GPUType,
@@ -30,17 +31,24 @@ import { UserSearchResultsPanel } from "@/components/user-search-results-panel";
 
 // 사용률 막대그래프 컴포넌트
 const UsageBar = ({ percentage, color }: { percentage: number; color: string }) => (
-  <div className="w-full bg-gray-200 rounded-full h-3">
-    <div className={`h-3 rounded-full transition-all duration-300 ${color}`} style={{ width: `${percentage}%` }} />
+  <div className="w-full bg-gray-200 rounded-full h-3 overflow-hidden relative">
+    <div
+      className={`h-3 rounded-full transition-all duration-300 ${color}`}
+      style={{ width: `${percentage}%` }}
+    >
+      <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/30 to-transparent animate-pulse" />
+    </div>
   </div>
 )
 
 import { NodeCard } from "@/components/node-card";
 import { JobItem } from "@/components/job-item";
 import { NodeGPUDetails } from "@/components/node-gpu-details";
+import { JobSubmissionForm } from "@/components/job-submission-form";
 
 // 메인 대시보드 컴포넌트
 export default function GPUDashboard() {
+  const [isModalOpen, setIsModalOpen] = useState(false);
   const [allNodes, setAllNodes] = useState<Node[]>([]);
   const [allJobs, setAllJobs] = useState<Job[]>([]);
 
@@ -325,6 +333,17 @@ export default function GPUDashboard() {
               >
                 전체 보기
               </Button>
+              <Dialog open={isModalOpen} onOpenChange={setIsModalOpen}>
+                <DialogTrigger asChild>
+                  <Button variant="default" size="sm" className="h-10 flex items-center gap-2">
+                    <PlusCircle className="w-4 h-4" />
+                    작업 제출
+                  </Button>
+                </DialogTrigger>
+                <DialogContent className="max-w-2xl bg-transparent border-none p-0">
+                  <JobSubmissionForm />
+                </DialogContent>
+              </Dialog>
               <div className="flex items-center gap-2 text-sm text-gray-600">
                 <Zap className="w-4 h-4" />
                 <span>실시간 업데이트: {currentTime.toLocaleTimeString()}</span>
