@@ -21,7 +21,6 @@ import type {
 
 import { GPU_NODE_COUNTS, users, teams } from "@/lib/constants";
 
-import { fetchNodes, fetchJobs } from "@/lib/api";
 import { getGridSize, getOptimalGridSize } from "@/lib/utils";
 
 import { performComplexSearch, findGpusByUserOrTeam } from "@/lib/search";
@@ -46,20 +45,44 @@ import { JobItem } from "@/components/job-item";
 import { NodeGPUDetails } from "@/components/node-gpu-details";
 import { JobSubmissionForm } from "@/components/job-submission-form";
 
+const BASE_URL = "https://backend.dev.violet.uplus.co.kr";
+
+// 노드/실행중 GPU 정보
+async function fetchNodes() {
+  const res = await fetch(`${BASE_URL}/nodes/`);
+  const data = await res.json();
+  return data.nodes;
+}
+
+// 대기중 작업 (pending workloads)
+async function fetchPendingWorkloads() {
+  const res = await fetch(`${BASE_URL}/jobs/pending-workloads/`);
+  const data = await res.json();
+  // data.pending_workloads: { queue_name: [workload, ...], ... }
+  // 평탄화해서 배열로 반환
+  return Object.values(data.pending_workloads || {}).flat();
+}
+
 // 메인 대시보드 컴포넌트
 export default function GPUDashboard() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [allNodes, setAllNodes] = useState<Node[]>([]);
+  const [allPendingWorkloads, setAllPendingWorkloads] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
   const [allJobs, setAllJobs] = useState<Job[]>([]);
 
   useEffect(() => {
-    const loadData = async () => {
-      const nodes = await fetchNodes();
+    async function load() {
+      setLoading(true);
+      const [nodes, pendingWorkloads] = await Promise.all([
+        fetchNodes(),
+        fetchPendingWorkloads(),
+      ]);
       setAllNodes(nodes);
-      const jobs = await fetchJobs(nodes);
-      setAllJobs(jobs);
-    };
-    loadData();
+      setAllPendingWorkloads(pendingWorkloads);
+      setLoading(false);
+    }
+    load();
   }, []);
 
   const [selectedGPUType, setSelectedGPUType] = useState<GPUType>("A100")
@@ -110,7 +133,7 @@ export default function GPUDashboard() {
 
   // 선택된 GPU 타입의 대기중인 Job 필터링
   const runningJobs = allJobs.filter(job => job.status === "running" && (selectedGPUType === "전체" || job.gpuType === selectedGPUType));
-  const pendingJobs = allJobs.filter(job => job.status !== "running" && (selectedGPUType === "전체" || job.gpuType === selectedGPUType));
+  const pendingJobs = allPendingWorkloads.filter(job => (selectedGPUType === "전체" || job.gpuType === selectedGPUType));
   const filteredRunningJobs = runningJobs.filter(job => runningJobSearch.trim() === "" || job.name.toLowerCase().includes(runningJobSearch.toLowerCase()) || job.user.toLowerCase().includes(runningJobSearch.toLowerCase()) || job.team.toLowerCase().includes(runningJobSearch.toLowerCase()));
   const filteredPendingJobs = pendingJobs.filter(job => pendingJobSearch.trim() === "" || job.name.toLowerCase().includes(pendingJobSearch.toLowerCase()) || job.user.toLowerCase().includes(pendingJobSearch.toLowerCase()) || job.team.toLowerCase().includes(pendingJobSearch.toLowerCase()));
 
@@ -356,7 +379,7 @@ export default function GPUDashboard() {
             {gpuTypes.map((gpuType) => {
               const typeNodes = allNodes.filter((n) => n.gpuType === gpuType)
               const typeOnlineNodes = typeNodes.filter((n) => n.status === "online").length
-              const typePendingJobs = allJobs.filter((j) => j.gpuType === gpuType).length
+              const typePendingJobs = allPendingWorkloads.filter((j) => j.gpuType === gpuType).length
 
               return (
                 <Button
