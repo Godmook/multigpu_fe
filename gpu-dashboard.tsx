@@ -47,20 +47,37 @@ import { JobSubmissionForm } from "@/components/job-submission-form";
 
 const BASE_URL = "https://backend.dev.violet.uplus.co.kr";
 
+// 안전한 fetch 유틸
+async function safeFetch<T>(url: string): Promise<T> {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
+  if (!res.headers.get('content-type')?.includes('application/json')) {
+    throw new Error('Response is not JSON');
+  }
+  return res.json();
+}
+
 // 노드/실행중 GPU 정보
 async function fetchNodes() {
-  const res = await fetch(`/api/proxy?url=/nodes/`);
-  const data = await res.json();
-  return data.nodes;
+  return safeFetch<{ nodes: Node[] }>('/api/proxy?url=/nodes/').then(d => d.nodes);
 }
 
 // 대기중 작업 (pending workloads)
 async function fetchPendingWorkloads() {
-  const res = await fetch(`/api/proxy?url=/jobs/pending-workloads/`);
-  const data = await res.json();
-  // data.pending_workloads: { queue_name: [workload, ...], ... }
-  // 평탄화해서 배열로 반환
-  return Object.values(data.pending_workloads || {}).flat();
+  return safeFetch<{ pending_workloads: Record<string, any[]> }>('/api/proxy?url=/jobs/pending-workloads/')
+    .then(d => Object.values(d.pending_workloads || {}).flat());
+}
+
+// 현재 시간 표시 컴포넌트 (Hydration mismatch 방지)
+function TimeDisplay() {
+  const [time, setTime] = useState<string | null>(null);
+  useEffect(() => {
+    const tick = () => setTime(new Date().toLocaleTimeString());
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, []);
+  return <span>{time ?? '--:--:--'}</span>;
 }
 
 // 메인 대시보드 컴포넌트
@@ -369,7 +386,7 @@ export default function GPUDashboard() {
               </Dialog>
               <div className="flex items-center gap-2 text-sm text-gray-600">
                 <Zap className="w-4 h-4" />
-                <span>실시간 업데이트: {currentTime.toLocaleTimeString()}</span>
+                <span>실시간 업데이트: <TimeDisplay /></span>
               </div>
             </div>
           </div>
