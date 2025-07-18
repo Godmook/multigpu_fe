@@ -49,14 +49,14 @@ const BASE_URL = "https://backend.dev.violet.uplus.co.kr";
 
 // 노드/실행중 GPU 정보
 async function fetchNodes() {
-  const res = await fetch(`${BASE_URL}/nodes/`);
+  const res = await fetch(`/api/proxy?url=/nodes/`);
   const data = await res.json();
   return data.nodes;
 }
 
 // 대기중 작업 (pending workloads)
 async function fetchPendingWorkloads() {
-  const res = await fetch(`${BASE_URL}/jobs/pending-workloads/`);
+  const res = await fetch(`/api/proxy?url=/jobs/pending-workloads/`);
   const data = await res.json();
   // data.pending_workloads: { queue_name: [workload, ...], ... }
   // 평탄화해서 배열로 반환
